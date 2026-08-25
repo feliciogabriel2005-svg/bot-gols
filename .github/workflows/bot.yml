@@ -5,6 +5,16 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
+# Impede duas execuções do bot ao mesmo tempo.
+# O bot já faz polling a cada 30 segundos, então não precisamos
+# iniciar outro processo enquanto o atual ainda está rodando.
+concurrency:
+  group: bot-gols-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -54,19 +64,23 @@ jobs:
         run: |
           set -e
 
-          echo "Arquivos disponíveis:"
+          echo "=========================================="
+          echo " LOCALIZANDO PROJETO"
+          echo "=========================================="
+
           ls -la
 
           if [ -f "bot_gols_final_v5.zip" ]; then
             echo "ZIP encontrado: bot_gols_final_v5.zip"
-
             unzip -o "bot_gols_final_v5.zip"
 
           elif [ -d "bot_gols" ]; then
             echo "Pasta bot_gols já existe"
 
           else
-            echo "ERRO: Não encontrei bot_gols_final_v5.zip nem a pasta bot_gols"
+            echo "ERRO: Não encontrei:"
+            echo "- bot_gols_final_v5.zip"
+            echo "- pasta bot_gols"
             exit 1
           fi
 
@@ -83,31 +97,24 @@ jobs:
       - name: Instalar dependências
         working-directory: ${{ env.BOT_DIR }}
         run: |
+          set -e
+
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
 
       # =========================================================
       # 5. CONFIGURAR CAMINHOS PYTHON
-      #
-      # src contém:
-      #   config.py
-      #   core/
-      #   ml/
-      #
-      # raiz contém:
-      #   models/
-      #   database/
       # =========================================================
       - name: Configurar caminhos Python
         working-directory: ${{ env.BOT_DIR }}
         shell: bash
         run: |
+          set -e
+
           echo "PYTHONPATH=$GITHUB_WORKSPACE/${{ env.BOT_DIR }}/src:$GITHUB_WORKSPACE/${{ env.BOT_DIR }}" >> "$GITHUB_ENV"
 
-          echo "PYTHONPATH configurado:"
-          echo "$GITHUB_WORKSPACE/${{ env.BOT_DIR }}/src"
-          echo "$GITHUB_WORKSPACE/${{ env.BOT_DIR }}"
+          echo "PYTHONPATH configurado."
 
 
       # =========================================================
@@ -119,7 +126,9 @@ jobs:
         run: |
           set -e
 
-          echo "=== VERIFICANDO ARQUIVOS PRINCIPAIS ==="
+          echo "=========================================="
+          echo " VERIFICANDO ESTRUTURA"
+          echo "=========================================="
 
           test -f src/config.py
           test -f src/scripts/run_bot.py
@@ -128,15 +137,11 @@ jobs:
           test -f database/connection.py
           test -f requirements.txt
 
-          echo "OK: estrutura do projeto encontrada"
+          echo "OK: estrutura principal encontrada."
 
 
       # =========================================================
       # 7. VERIFICAR IMPORTS
-      #
-      # IMPORTANTE:
-      # O projeto usa models.signal
-      # NÃO existe módulo chamado modelos
       # =========================================================
       - name: Verificar módulos do projeto
         working-directory: ${{ env.BOT_DIR }}
@@ -144,32 +149,204 @@ jobs:
         run: |
           set -e
 
-          echo "=== TESTANDO CONFIG ==="
+          echo "=========================================="
+          echo " TESTANDO IMPORTS"
+          echo "=========================================="
+
+          echo ""
+          echo "1. CONFIG"
           python -c "from config import SystemConfig; print('OK: config')"
 
-          echo "=== TESTANDO MODELS ==="
+          echo ""
+          echo "2. MODELS"
           python -c "from models.signal import Signal, MatchState; print('OK: models.signal')"
 
-          echo "=== TESTANDO DATABASE ==="
+          echo ""
+          echo "3. DATABASE"
           python -c "from database.connection import get_db_connection, init_db; print('OK: database.connection')"
 
-          echo "=== TESTANDO CORE ==="
+          echo ""
+          echo "4. CORE"
           python -c "from core.live_scanner import LiveScanner; print('OK: core.live_scanner')"
 
-          echo "=== TODOS OS IMPORTS PRINCIPAIS OK ==="
+          echo ""
+          echo "TODOS OS IMPORTS PRINCIPAIS OK."
 
 
       # =========================================================
-      # 8. EXECUTAR TESTES
+      # 8. VERIFICAR API KEY
       #
-      # Não usamos pytest porque requirements.txt não possui pytest.
-      # Os testes existentes usam unittest.
+      # NÃO mostra a chave.
+      # Apenas verifica se o Secret chegou ao runner.
       # =========================================================
-      - name: Executar testes
+      - name: Verificar API Key
         working-directory: ${{ env.BOT_DIR }}
         shell: bash
         run: |
           set -e
+
+          echo "=========================================="
+          echo " VERIFICANDO API KEY"
+          echo "=========================================="
+
+          if [ -z "${API_FOOTBALL_KEY:-}" ]; then
+            echo "ERRO: API_FOOTBALL_KEY não chegou ao GitHub Actions."
+            echo "Confira o Secret:"
+            echo "API_FOOTBALL_KEY"
+            exit 1
+          fi
+
+          KEY_LENGTH=${#API_FOOTBALL_KEY}
+
+          echo "API_FOOTBALL_KEY: configurada"
+          echo "Tamanho da chave: ${KEY_LENGTH} caracteres"
+
+          if [[ "$API_FOOTBALL_KEY" == live_* ]]; then
+            echo "Prefixo: live_ OK"
+          else
+            echo "AVISO: a chave não começa com live_"
+          fi
+
+
+      # =========================================================
+      # 9. TESTAR AUTENTICAÇÃO NA API-FOOTBALL
+      #
+      # Esta etapa é MUITO importante.
+      #
+      # Primeiro testa /status.
+      # Depois testa /fixtures?live=all.
+      #
+      # Assim sabemos se o 403 vem da autenticação ou
+      # especificamente do acesso aos jogos ao vivo.
+      # =========================================================
+      - name: Diagnosticar API-Football
+        shell: bash
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo " DIAGNÓSTICO API-FOOTBALL"
+          echo "=========================================="
+
+          API_URL="https://${API_FOOTBALL_HOST}"
+
+          echo ""
+          echo "Host:"
+          echo "$API_URL"
+
+          echo ""
+          echo "------------------------------------------"
+          echo "TESTE 1: STATUS DA API"
+          echo "------------------------------------------"
+
+          STATUS_CODE=$(curl -sS \
+            -o /tmp/api_status_response.txt \
+            -w "%{http_code}" \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -H "x-apisports-key: ${API_FOOTBALL_KEY}" \
+            "${API_URL}/status")
+
+          echo "HTTP Status: ${STATUS_CODE}"
+
+          echo "Resposta da API:"
+          cat /tmp/api_status_response.txt
+          echo ""
+
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo ""
+            echo "ERRO: A API não aceitou a chave no endpoint /status."
+            echo "O problema está na autenticação/configuração da API."
+            exit 1
+          fi
+
+          echo ""
+          echo "OK: autenticação da API funcionando."
+
+
+          echo ""
+          echo "------------------------------------------"
+          echo "TESTE 2: JOGOS AO VIVO"
+          echo "------------------------------------------"
+
+          LIVE_CODE=$(curl -sS \
+            -o /tmp/api_live_response.txt \
+            -w "%{http_code}" \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -H "x-apisports-key: ${API_FOOTBALL_KEY}" \
+            "${API_URL}/fixtures?live=all")
+
+          echo "HTTP Status: ${LIVE_CODE}"
+
+          echo "Resposta da API:"
+          cat /tmp/api_live_response.txt
+          echo ""
+
+          if [ "$LIVE_CODE" != "200" ]; then
+            echo ""
+            echo "ERRO: A autenticação passou, mas a consulta de jogos ao vivo foi recusada."
+            echo "Isso aponta para acesso/plano/limitação da API ou para a forma"
+            echo "como o endpoint de jogos ao vivo está sendo utilizado."
+            exit 1
+          fi
+
+          echo ""
+          echo "OK: endpoint de jogos ao vivo respondeu normalmente."
+
+
+      # =========================================================
+      # 10. VERIFICAR CONFIGURAÇÃO FINAL
+      # =========================================================
+      - name: Verificar configuração
+        working-directory: ${{ env.BOT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo " CONFIGURAÇÃO FINAL"
+          echo "=========================================="
+
+          python - <<'PY'
+          import os
+
+          print("APP_ENV:", os.getenv("APP_ENV"))
+          print("MODE:", os.getenv("MODE"))
+          print("POLL_INTERVAL_SECONDS:", os.getenv("POLL_INTERVAL_SECONDS"))
+          print("API_FOOTBALL_HOST:", os.getenv("API_FOOTBALL_HOST"))
+          print("DB_PATH:", os.getenv("DB_PATH"))
+
+          key = os.getenv("API_FOOTBALL_KEY", "")
+
+          if key:
+              print("API_FOOTBALL_KEY: configurada")
+          else:
+              print("ERRO: API_FOOTBALL_KEY ausente")
+              raise SystemExit(1)
+
+          telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+          if telegram_token:
+              print("TELEGRAM_BOT_TOKEN: configurado")
+          else:
+              print("AVISO: TELEGRAM_BOT_TOKEN não configurado")
+
+          print("Configuração final OK.")
+          PY
+
+
+      # =========================================================
+      # 11. EXECUTAR TESTES
+      # =========================================================
+      - name: Executar testes
+        working-directory: ${{ env.BOT_DIR }}
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo " EXECUTANDO TESTES"
+          echo "=========================================="
 
           python -m unittest discover \
             -s tests \
@@ -178,39 +355,7 @@ jobs:
 
 
       # =========================================================
-      # 9. VERIFICAR CONFIGURAÇÃO FINAL
-      # =========================================================
-      - name: Verificar configuração
-        working-directory: ${{ env.BOT_DIR }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          import os
-
-          print("=== CONFIGURAÇÃO ===")
-          print("APP_ENV:", os.getenv("APP_ENV"))
-          print("MODE:", os.getenv("MODE"))
-          print("POLL_INTERVAL_SECONDS:", os.getenv("POLL_INTERVAL_SECONDS"))
-          print("API_FOOTBALL_HOST:", os.getenv("API_FOOTBALL_HOST"))
-
-          key = os.getenv("API_FOOTBALL_KEY", "")
-
-          if key:
-              print("API_FOOTBALL_KEY: configurada")
-          else:
-              print("AVISO: API_FOOTBALL_KEY não configurada")
-
-          telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-
-          if telegram_token:
-              print("TELEGRAM_BOT_TOKEN: configurado")
-          else:
-              print("AVISO: TELEGRAM_BOT_TOKEN não configurado")
-          PY
-
-
-      # =========================================================
-      # 10. INICIAR SCANNER
+      # 12. INICIAR SCANNER
       # =========================================================
       - name: Iniciar o scanner
         working-directory: ${{ env.BOT_DIR }}
@@ -228,7 +373,7 @@ jobs:
 
 
       # =========================================================
-      # 11. SALVAR LOG SE O BOT PARAR
+      # 13. SALVAR LOGS
       # =========================================================
       - name: Salvar logs
         if: always()
