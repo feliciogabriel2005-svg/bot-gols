@@ -9,18 +9,36 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
 
+    env:
+      APP_ENV: PRODUCTION
+      MODE: PAPER_TRADING
+      POLL_INTERVAL_SECONDS: "30"
+
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      API_FOOTBALL_HOST: v3.football.api-sports.io
+
+      DB_PATH: production_live.db
+
+      PAPER_STAKE: "100.0"
+      PAPER_BANKROLL: "1000.0"
+
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      BASE_GOAL_RATE_PER_MINUTE: "0.03"
+
     steps:
 
-      # ==========================================================
+      # =========================================================
       # 1. BAIXAR CÓDIGO
-      # ==========================================================
+      # =========================================================
       - name: Baixar código
         uses: actions/checkout@v4
 
 
-      # ==========================================================
+      # =========================================================
       # 2. CONFIGURAR PYTHON
-      # ==========================================================
+      # =========================================================
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
@@ -28,189 +46,196 @@ jobs:
           cache: "pip"
 
 
-      # ==========================================================
-      # 3. EXTRAIR PROJETO
-      # ==========================================================
-      - name: Extrair projeto
+      # =========================================================
+      # 3. LOCALIZAR E EXTRAIR PROJETO
+      # =========================================================
+      - name: Preparar projeto
+        shell: bash
         run: |
-          echo "Arquivos do repositório:"
+          set -e
+
+          echo "Arquivos disponíveis:"
           ls -la
 
           if [ -f "bot_gols_final_v5.zip" ]; then
-            echo "Encontrado bot_gols_final_v5.zip"
-            unzip -o bot_gols_final_v5.zip -d .
+            echo "ZIP encontrado: bot_gols_final_v5.zip"
+
+            unzip -o "bot_gols_final_v5.zip"
+
+          elif [ -d "bot_gols" ]; then
+            echo "Pasta bot_gols já existe"
+
           else
-            echo "ZIP não encontrado. Continuando com os arquivos do repositório."
+            echo "ERRO: Não encontrei bot_gols_final_v5.zip nem a pasta bot_gols"
+            exit 1
           fi
 
           echo ""
           echo "Estrutura encontrada:"
-          find . -maxdepth 4 -type f | sort | head -300
+          find bot_gols -maxdepth 3 -type f | sort
+
+          echo "BOT_DIR=bot_gols" >> "$GITHUB_ENV"
 
 
-      # ==========================================================
-      # 4. LOCALIZAR PROJETO
-      # ==========================================================
-      - name: Localizar projeto
-        run: |
-          echo "Procurando run_bot.py..."
-          find . -type f -name "run_bot.py" -print
-
-          echo ""
-          echo "Procurando config..."
-          find . -type f \( -name "config.py" -o -name "config" \) -print
-
-          echo ""
-          echo "Procurando modelos..."
-          find . -type f \( -name "modelos.py" -o -name "modelos" \) -print
-
-          echo ""
-          echo "Procurando diretórios modelos..."
-          find . -type d -name "modelos" -print
-
-
-      # ==========================================================
-      # 5. DEFINIR DIRETÓRIO DO BOT
-      # ==========================================================
-      - name: Preparar ambiente do projeto
-        run: |
-          if [ -d "bot_gols" ]; then
-            echo "Projeto encontrado em ./bot_gols"
-            echo "BOT_DIR=bot_gols" >> "$GITHUB_ENV"
-          else
-            echo "Projeto na raiz do repositório"
-            echo "BOT_DIR=." >> "$GITHUB_ENV"
-          fi
-
-
-      # ==========================================================
-      # 6. INSTALAR DEPENDÊNCIAS
-      # ==========================================================
+      # =========================================================
+      # 4. INSTALAR DEPENDÊNCIAS
+      # =========================================================
       - name: Instalar dependências
         working-directory: ${{ env.BOT_DIR }}
         run: |
           python -m pip install --upgrade pip
-
-          if [ -f requirements.txt ]; then
-            echo "Instalando requirements.txt..."
-            python -m pip install -r requirements.txt
-          else
-            echo "requirements.txt não encontrado."
-          fi
-
-          echo ""
-          echo "Garantindo pytest..."
-          python -m pip install pytest
+          pip install -r requirements.txt
 
 
-      # ==========================================================
-      # 7. CONFIGURAR PYTHONPATH
-      # ==========================================================
+      # =========================================================
+      # 5. CONFIGURAR CAMINHOS PYTHON
+      #
+      # src contém:
+      #   config.py
+      #   core/
+      #   ml/
+      #
+      # raiz contém:
+      #   models/
+      #   database/
+      # =========================================================
       - name: Configurar caminhos Python
         working-directory: ${{ env.BOT_DIR }}
+        shell: bash
         run: |
-          echo "PYTHONPATH=$PWD/src:$PWD:$PYTHONPATH" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/${{ env.BOT_DIR }}/src:$GITHUB_WORKSPACE/${{ env.BOT_DIR }}" >> "$GITHUB_ENV"
 
           echo "PYTHONPATH configurado:"
-          echo "$PWD/src"
-          echo "$PWD"
+          echo "$GITHUB_WORKSPACE/${{ env.BOT_DIR }}/src"
+          echo "$GITHUB_WORKSPACE/${{ env.BOT_DIR }}"
 
 
-      # ==========================================================
-      # 8. CRIAR AMBIENTE
-      # ==========================================================
-      - name: Criar ambiente
-        working-directory: ${{ env.BOT_DIR }}
-        run: |
-          cat > .env << 'EOF'
-          APP_ENV=PRODUCTION
-          MODE=PAPER_TRADING
-          POLL_INTERVAL_SECONDS=30
-          DB_PATH=production_live.db
-          EOF
-
-          echo ".env criado."
-
-
-      # ==========================================================
-      # 9. VERIFICAR ESTRUTURA
-      # ==========================================================
+      # =========================================================
+      # 6. VERIFICAR ESTRUTURA
+      # =========================================================
       - name: Verificar projeto
         working-directory: ${{ env.BOT_DIR }}
+        shell: bash
         run: |
-          echo "======================================"
-          echo "VERSÃO DO PYTHON"
-          echo "======================================"
-          python --version
+          set -e
 
-          echo ""
-          echo "======================================"
-          echo "ESTRUTURA DO PROJETO"
-          echo "======================================"
-          find . -maxdepth 4 -type f | sort | head -300
+          echo "=== VERIFICANDO ARQUIVOS PRINCIPAIS ==="
 
-          echo ""
-          echo "======================================"
-          echo "PYTHONPATH"
-          echo "======================================"
-          echo "$PYTHONPATH"
+          test -f src/config.py
+          test -f src/scripts/run_bot.py
+          test -f src/core/live_scanner.py
+          test -f models/signal.py
+          test -f database/connection.py
+          test -f requirements.txt
+
+          echo "OK: estrutura do projeto encontrada"
 
 
-      # ==========================================================
-      # 10. VERIFICAR MÓDULO CONFIG
-      # ==========================================================
-      - name: Verificar módulo config
+      # =========================================================
+      # 7. VERIFICAR IMPORTS
+      #
+      # IMPORTANTE:
+      # O projeto usa models.signal
+      # NÃO existe módulo chamado modelos
+      # =========================================================
+      - name: Verificar módulos do projeto
         working-directory: ${{ env.BOT_DIR }}
+        shell: bash
         run: |
-          python -c "import config; print('OK: módulo config encontrado')"
+          set -e
+
+          echo "=== TESTANDO CONFIG ==="
+          python -c "from config import SystemConfig; print('OK: config')"
+
+          echo "=== TESTANDO MODELS ==="
+          python -c "from models.signal import Signal, MatchState; print('OK: models.signal')"
+
+          echo "=== TESTANDO DATABASE ==="
+          python -c "from database.connection import get_db_connection, init_db; print('OK: database.connection')"
+
+          echo "=== TESTANDO CORE ==="
+          python -c "from core.live_scanner import LiveScanner; print('OK: core.live_scanner')"
+
+          echo "=== TODOS OS IMPORTS PRINCIPAIS OK ==="
 
 
-      # ==========================================================
-      # 11. VERIFICAR MÓDULO MODELOS
-      # ==========================================================
-      - name: Verificar módulo modelos
-        working-directory: ${{ env.BOT_DIR }}
-        run: |
-          python -c "import modelos; print('OK: módulo modelos encontrado')"
-
-
-      # ==========================================================
-      # 12. EXECUTAR TESTES
-      # ==========================================================
+      # =========================================================
+      # 8. EXECUTAR TESTES
+      #
+      # Não usamos pytest porque requirements.txt não possui pytest.
+      # Os testes existentes usam unittest.
+      # =========================================================
       - name: Executar testes
         working-directory: ${{ env.BOT_DIR }}
+        shell: bash
         run: |
-          if [ -d tests ]; then
-            echo "Executando testes..."
-            python -m pytest -q
-          else
-            echo "Pasta tests não encontrada."
-            echo "Testes ignorados."
-          fi
+          set -e
+
+          python -m unittest discover \
+            -s tests \
+            -p "test*.py" \
+            -v
 
 
-      # ==========================================================
-      # 13. LOCALIZAR E EXECUTAR SCANNER
-      # ==========================================================
+      # =========================================================
+      # 9. VERIFICAR CONFIGURAÇÃO FINAL
+      # =========================================================
+      - name: Verificar configuração
+        working-directory: ${{ env.BOT_DIR }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+
+          print("=== CONFIGURAÇÃO ===")
+          print("APP_ENV:", os.getenv("APP_ENV"))
+          print("MODE:", os.getenv("MODE"))
+          print("POLL_INTERVAL_SECONDS:", os.getenv("POLL_INTERVAL_SECONDS"))
+          print("API_FOOTBALL_HOST:", os.getenv("API_FOOTBALL_HOST"))
+
+          key = os.getenv("API_FOOTBALL_KEY", "")
+
+          if key:
+              print("API_FOOTBALL_KEY: configurada")
+          else:
+              print("AVISO: API_FOOTBALL_KEY não configurada")
+
+          telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+          if telegram_token:
+              print("TELEGRAM_BOT_TOKEN: configurado")
+          else:
+              print("AVISO: TELEGRAM_BOT_TOKEN não configurado")
+          PY
+
+
+      # =========================================================
+      # 10. INICIAR SCANNER
+      # =========================================================
       - name: Iniciar o scanner
         working-directory: ${{ env.BOT_DIR }}
+        shell: bash
         run: |
-          echo "======================================"
-          echo "INICIANDO BOT"
-          echo "======================================"
+          set -e
 
-          if [ -f "src/scripts/run_bot.py" ]; then
-            echo "Encontrado: src/scripts/run_bot.py"
-            python src/scripts/run_bot.py
+          echo "=========================================="
+          echo " INICIANDO BOT DE GOLS"
+          echo " MODO: PAPER TRADING"
+          echo " INTERVALO: 30 SEGUNDOS"
+          echo "=========================================="
 
-          elif [ -f "scripts/run_bot.py" ]; then
-            echo "Encontrado: scripts/run_bot.py"
-            python scripts/run_bot.py
+          python src/scripts/run_bot.py
 
-          else
-            echo "ERRO: run_bot.py não encontrado."
-            echo ""
-            echo "Arquivos Python encontrados:"
-            find . -type f -name "*.py" | sort
-            exit 1
-          fi
+
+      # =========================================================
+      # 11. SALVAR LOG SE O BOT PARAR
+      # =========================================================
+      - name: Salvar logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-logs
+          path: |
+            bot_gols/bot_execution.log
+            bot_gols/production_live.db
+          if-no-files-found: ignore
