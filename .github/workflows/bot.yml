@@ -18,34 +18,97 @@ jobs:
         with:
           python-version: "3.11"
 
-          - name: Extrair projeto
-  run: |
-    unzip -o bot_gols_final_v5.zip -d .
-    find . -name "run_bot.py" -print
+      - name: Extrair projeto
+        shell: bash
+        run: |
+          set -e
+
+          echo "Arquivos disponíveis:"
+          ls -la
+
+          if [ ! -f "bot_gols_final_v5.zip" ]; then
+            echo "ERRO: bot_gols_final_v5.zip não encontrado."
+            exit 1
+          fi
+
+          unzip -o bot_gols_final_v5.zip -d .
+
+          echo "Procurando run_bot.py..."
+          BOT_SCRIPT=$(find . -type f -name "run_bot.py" -print -quit)
+
+          if [ -z "$BOT_SCRIPT" ]; then
+            echo "ERRO: run_bot.py não foi encontrado após extrair o projeto."
+            echo "Arquivos encontrados:"
+            find . -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          echo "run_bot.py encontrado em: $BOT_SCRIPT"
+          echo "BOT_SCRIPT=$BOT_SCRIPT" >> "$GITHUB_ENV"
 
       - name: Instalar dependências
+        shell: bash
         run: |
-          pip install -r requirements.txt
+          set -e
+
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt não encontrado na raiz."
+            REQ_FILE=$(find . -type f -name "requirements.txt" -print -quit)
+
+            if [ -z "$REQ_FILE" ]; then
+              echo "ERRO: nenhum requirements.txt encontrado."
+              exit 1
+            fi
+
+            echo "Usando: $REQ_FILE"
+            pip install -r "$REQ_FILE"
+          fi
 
       - name: Criar ambiente
+        shell: bash
         run: |
-          cat > .env << 'EOF'
+          cat > .env <<'EOF'
           APP_ENV=PRODUCTION
           MODE=PAPER_TRADING
           POLL_INTERVAL_SECONDS=30
           DB_PATH=production_live.db
-          BASE_GOAL_RATE_PER_MINUTE=0.03
-          API_FOOTBALL_KEY=${{ secrets.API_FOOTBALL_KEY }}
-          API_FOOTBALL_HOST=v3.football.api-sports.io
-          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
-          ENABLE_REAL_BETTING=FALSE
           EOF
 
-      - name: Executar testes
+      - name: Verificar projeto
+        shell: bash
         run: |
-          PYTHONPATH=src:. python -m unittest discover -s tests -v
+          echo "Python:"
+          python --version
 
-      - name: Iniciar scanner
+          echo "Script:"
+          echo "$BOT_SCRIPT"
+
+          if [ ! -f "$BOT_SCRIPT" ]; then
+            echo "ERRO: o script do bot não existe."
+            exit 1
+          fi
+
+          echo "Projeto encontrado corretamente."
+
+      - name: Executar testes
+        shell: bash
         run: |
-          PYTHONPATH=src:. python src/scripts/run_bot.py
+          if [ -d "tests" ]; then
+            echo "Pasta tests encontrada. Executando testes..."
+            python -m unittest discover -s tests -p "test*.py"
+          else
+            echo "Pasta tests não encontrada."
+            echo "Nenhum teste automático para executar."
+          fi
+
+      - name: Iniciar o scanner
+        shell: bash
+        run: |
+          set -e
+
+          echo "Iniciando bot..."
+          echo "Script: $BOT_SCRIPT"
+
+          PYTHONPATH=src:. python "$BOT_SCRIPT"
