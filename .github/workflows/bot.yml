@@ -10,33 +10,117 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ==========================================================
+      # 1. BAIXAR CÓDIGO
+      # ==========================================================
       - name: Baixar código
         uses: actions/checkout@v4
 
+
+      # ==========================================================
+      # 2. CONFIGURAR PYTHON
+      # ==========================================================
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
+
+      # ==========================================================
+      # 3. EXTRAIR PROJETO
+      # ==========================================================
       - name: Extrair projeto
         run: |
-          unzip -o bot_gols_final_v5.zip -d .
-          echo "Conteúdo após extração:"
+          echo "Arquivos do repositório:"
           ls -la
-          echo "Conteúdo do projeto:"
-          ls -la bot_gols || true
 
+          if [ -f "bot_gols_final_v5.zip" ]; then
+            echo "Encontrado bot_gols_final_v5.zip"
+            unzip -o bot_gols_final_v5.zip -d .
+          else
+            echo "ZIP não encontrado. Continuando com os arquivos do repositório."
+          fi
+
+          echo ""
+          echo "Estrutura encontrada:"
+          find . -maxdepth 4 -type f | sort | head -300
+
+
+      # ==========================================================
+      # 4. LOCALIZAR PROJETO
+      # ==========================================================
+      - name: Localizar projeto
+        run: |
+          echo "Procurando run_bot.py..."
+          find . -type f -name "run_bot.py" -print
+
+          echo ""
+          echo "Procurando config..."
+          find . -type f \( -name "config.py" -o -name "config" \) -print
+
+          echo ""
+          echo "Procurando modelos..."
+          find . -type f \( -name "modelos.py" -o -name "modelos" \) -print
+
+          echo ""
+          echo "Procurando diretórios modelos..."
+          find . -type d -name "modelos" -print
+
+
+      # ==========================================================
+      # 5. DEFINIR DIRETÓRIO DO BOT
+      # ==========================================================
+      - name: Preparar ambiente do projeto
+        run: |
+          if [ -d "bot_gols" ]; then
+            echo "Projeto encontrado em ./bot_gols"
+            echo "BOT_DIR=bot_gols" >> "$GITHUB_ENV"
+          else
+            echo "Projeto na raiz do repositório"
+            echo "BOT_DIR=." >> "$GITHUB_ENV"
+          fi
+
+
+      # ==========================================================
+      # 6. INSTALAR DEPENDÊNCIAS
+      # ==========================================================
       - name: Instalar dependências
-        working-directory: bot_gols
+        working-directory: ${{ env.BOT_DIR }}
         run: |
           python -m pip install --upgrade pip
+
           if [ -f requirements.txt ]; then
+            echo "Instalando requirements.txt..."
             python -m pip install -r requirements.txt
+          else
+            echo "requirements.txt não encontrado."
           fi
+
+          echo ""
+          echo "Garantindo pytest..."
           python -m pip install pytest
 
+
+      # ==========================================================
+      # 7. CONFIGURAR PYTHONPATH
+      # ==========================================================
+      - name: Configurar caminhos Python
+        working-directory: ${{ env.BOT_DIR }}
+        run: |
+          echo "PYTHONPATH=$PWD/src:$PWD:$PYTHONPATH" >> "$GITHUB_ENV"
+
+          echo "PYTHONPATH configurado:"
+          echo "$PWD/src"
+          echo "$PWD"
+
+
+      # ==========================================================
+      # 8. CRIAR AMBIENTE
+      # ==========================================================
       - name: Criar ambiente
-        working-directory: bot_gols
+        working-directory: ${{ env.BOT_DIR }}
         run: |
           cat > .env << 'EOF'
           APP_ENV=PRODUCTION
@@ -45,38 +129,88 @@ jobs:
           DB_PATH=production_live.db
           EOF
 
+          echo ".env criado."
+
+
+      # ==========================================================
+      # 9. VERIFICAR ESTRUTURA
+      # ==========================================================
       - name: Verificar projeto
-        working-directory: bot_gols
-        env:
-          PYTHONPATH: src
+        working-directory: ${{ env.BOT_DIR }}
         run: |
-          echo "Python:"
+          echo "======================================"
+          echo "VERSÃO DO PYTHON"
+          echo "======================================"
           python --version
 
-          echo "Estrutura do projeto:"
-          find . -maxdepth 3 -type f | sort | head -200
+          echo ""
+          echo "======================================"
+          echo "ESTRUTURA DO PROJETO"
+          echo "======================================"
+          find . -maxdepth 4 -type f | sort | head -300
 
-          echo "Verificando importações..."
-          python -c "from config import SystemConfig; print('config OK')"
+          echo ""
+          echo "======================================"
+          echo "PYTHONPATH"
+          echo "======================================"
+          echo "$PYTHONPATH"
 
+
+      # ==========================================================
+      # 10. VERIFICAR MÓDULO CONFIG
+      # ==========================================================
+      - name: Verificar módulo config
+        working-directory: ${{ env.BOT_DIR }}
+        run: |
+          python -c "import config; print('OK: módulo config encontrado')"
+
+
+      # ==========================================================
+      # 11. VERIFICAR MÓDULO MODELOS
+      # ==========================================================
+      - name: Verificar módulo modelos
+        working-directory: ${{ env.BOT_DIR }}
+        run: |
+          python -c "import modelos; print('OK: módulo modelos encontrado')"
+
+
+      # ==========================================================
+      # 12. EXECUTAR TESTES
+      # ==========================================================
       - name: Executar testes
-        working-directory: bot_gols
-        env:
-          PYTHONPATH: src
+        working-directory: ${{ env.BOT_DIR }}
         run: |
           if [ -d tests ]; then
+            echo "Executando testes..."
             python -m pytest -q
           else
-            echo "Pasta tests não encontrada - pulando testes"
+            echo "Pasta tests não encontrada."
+            echo "Testes ignorados."
           fi
 
-      - name: Iniciar o scanner
-        working-directory: bot_gols
-        env:
-          PYTHONPATH: src
-        run: |
-          echo "Iniciando bot..."
-          echo "Script:"
-          echo "./src/scripts/run_bot.py"
 
-          python ./src/scripts/run_bot.py
+      # ==========================================================
+      # 13. LOCALIZAR E EXECUTAR SCANNER
+      # ==========================================================
+      - name: Iniciar o scanner
+        working-directory: ${{ env.BOT_DIR }}
+        run: |
+          echo "======================================"
+          echo "INICIANDO BOT"
+          echo "======================================"
+
+          if [ -f "src/scripts/run_bot.py" ]; then
+            echo "Encontrado: src/scripts/run_bot.py"
+            python src/scripts/run_bot.py
+
+          elif [ -f "scripts/run_bot.py" ]; then
+            echo "Encontrado: scripts/run_bot.py"
+            python scripts/run_bot.py
+
+          else
+            echo "ERRO: run_bot.py não encontrado."
+            echo ""
+            echo "Arquivos Python encontrados:"
+            find . -type f -name "*.py" | sort
+            exit 1
+          fi
