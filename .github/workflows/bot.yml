@@ -1,0 +1,46 @@
+name: Bot de Gols - Paper Trading
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+
+      - name: Criar ambiente
+        run: |
+          cat > .env << 'EOF'
+          APP_ENV=PRODUCTION
+          MODE=PAPER_TRADING
+          POLL_INTERVAL_SECONDS=30
+          DB_PATH=production_live.db
+          BASE_GOAL_RATE_PER_MINUTE=0.03
+          API_FOOTBALL_KEY=${{ secrets.API_FOOTBALL_KEY }}
+          API_FOOTBALL_HOST=v3.football.api-sports.io
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          ENABLE_REAL_BETTING=FALSE
+          EOF
+
+      - name: Executar testes
+        run: |
+          PYTHONPATH=src:. python -m unittest discover -s tests -v
+
+      - name: Iniciar scanner
+        run: |
+          PYTHONPATH=src:. python src/scripts/run_bot.py
