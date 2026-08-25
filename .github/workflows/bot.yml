@@ -21,21 +21,22 @@ jobs:
       - name: Extrair projeto
         run: |
           unzip -o bot_gols_final_v5.zip -d .
-          echo "Conteúdo extraído:"
-          ls -la bot_gols
-          echo "Conteúdo do src:"
-          ls -la bot_gols/src
-          echo "Procurando run_bot.py:"
-          find bot_gols -name "run_bot.py" -print
+          echo "Conteúdo após extração:"
+          ls -la
+          echo "Conteúdo do projeto:"
+          ls -la bot_gols || true
 
       - name: Instalar dependências
-        working-directory: ./bot_gols
+        working-directory: bot_gols
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+          python -m pip install pytest
 
       - name: Criar ambiente
-        working-directory: ./bot_gols
+        working-directory: bot_gols
         run: |
           cat > .env << 'EOF'
           APP_ENV=PRODUCTION
@@ -45,41 +46,37 @@ jobs:
           EOF
 
       - name: Verificar projeto
-        working-directory: ./bot_gols
+        working-directory: bot_gols
         env:
-          PYTHONPATH: ./src
+          PYTHONPATH: src
         run: |
-          echo "Diretório atual:"
-          pwd
           echo "Python:"
           python --version
-          echo "PYTHONPATH:"
-          echo "$PYTHONPATH"
-          echo "Arquivos:"
-          ls -la
-          echo "src:"
-          ls -la src
-          echo "config:"
-          find src -maxdepth 2 -iname "config*" -print
+
+          echo "Estrutura do projeto:"
+          find . -maxdepth 3 -type f | sort | head -200
+
+          echo "Verificando importações..."
+          python -c "from config import SystemConfig; print('config OK')"
 
       - name: Executar testes
-        working-directory: ./bot_gols
+        working-directory: bot_gols
         env:
-          PYTHONPATH: ./src
+          PYTHONPATH: src
         run: |
           if [ -d tests ]; then
             python -m pytest -q
           else
-            echo "Nenhum diretório tests encontrado. Continuando..."
+            echo "Pasta tests não encontrada - pulando testes"
           fi
 
       - name: Iniciar o scanner
-        working-directory: ./bot_gols
+        working-directory: bot_gols
         env:
-          PYTHONPATH: ./src
-          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
         run: |
           echo "Iniciando bot..."
           echo "Script:"
-          find src -name "run_bot.py" -print
-          python src/scripts/run_bot.py
+          echo "./src/scripts/run_bot.py"
+
+          python ./src/scripts/run_bot.py
