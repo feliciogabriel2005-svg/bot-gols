@@ -19,57 +19,25 @@ jobs:
           python-version: "3.11"
 
       - name: Extrair projeto
-        shell: bash
         run: |
-          set -e
-
-          echo "Arquivos disponíveis:"
-          ls -la
-
-          if [ ! -f "bot_gols_final_v5.zip" ]; then
-            echo "ERRO: bot_gols_final_v5.zip não encontrado."
-            exit 1
-          fi
-
           unzip -o bot_gols_final_v5.zip -d .
-
-          echo "Procurando run_bot.py..."
-          BOT_SCRIPT=$(find . -type f -name "run_bot.py" -print -quit)
-
-          if [ -z "$BOT_SCRIPT" ]; then
-            echo "ERRO: run_bot.py não foi encontrado após extrair o projeto."
-            echo "Arquivos encontrados:"
-            find . -maxdepth 5 -type f | sort
-            exit 1
-          fi
-
-          echo "run_bot.py encontrado em: $BOT_SCRIPT"
-          echo "BOT_SCRIPT=$BOT_SCRIPT" >> "$GITHUB_ENV"
+          echo "Conteúdo extraído:"
+          ls -la bot_gols
+          echo "Conteúdo do src:"
+          ls -la bot_gols/src
+          echo "Procurando run_bot.py:"
+          find bot_gols -name "run_bot.py" -print
 
       - name: Instalar dependências
-        shell: bash
+        working-directory: ./bot_gols
         run: |
-          set -e
-
-          if [ -f "requirements.txt" ]; then
-            pip install -r requirements.txt
-          else
-            echo "requirements.txt não encontrado na raiz."
-            REQ_FILE=$(find . -type f -name "requirements.txt" -print -quit)
-
-            if [ -z "$REQ_FILE" ]; then
-              echo "ERRO: nenhum requirements.txt encontrado."
-              exit 1
-            fi
-
-            echo "Usando: $REQ_FILE"
-            pip install -r "$REQ_FILE"
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Criar ambiente
-        shell: bash
+        working-directory: ./bot_gols
         run: |
-          cat > .env <<'EOF'
+          cat > .env << 'EOF'
           APP_ENV=PRODUCTION
           MODE=PAPER_TRADING
           POLL_INTERVAL_SECONDS=30
@@ -77,38 +45,41 @@ jobs:
           EOF
 
       - name: Verificar projeto
-        shell: bash
+        working-directory: ./bot_gols
+        env:
+          PYTHONPATH: ./src
         run: |
+          echo "Diretório atual:"
+          pwd
           echo "Python:"
           python --version
-
-          echo "Script:"
-          echo "$BOT_SCRIPT"
-
-          if [ ! -f "$BOT_SCRIPT" ]; then
-            echo "ERRO: o script do bot não existe."
-            exit 1
-          fi
-
-          echo "Projeto encontrado corretamente."
+          echo "PYTHONPATH:"
+          echo "$PYTHONPATH"
+          echo "Arquivos:"
+          ls -la
+          echo "src:"
+          ls -la src
+          echo "config:"
+          find src -maxdepth 2 -iname "config*" -print
 
       - name: Executar testes
-        shell: bash
+        working-directory: ./bot_gols
+        env:
+          PYTHONPATH: ./src
         run: |
-          if [ -d "tests" ]; then
-            echo "Pasta tests encontrada. Executando testes..."
-            python -m unittest discover -s tests -p "test*.py"
+          if [ -d tests ]; then
+            python -m pytest -q
           else
-            echo "Pasta tests não encontrada."
-            echo "Nenhum teste automático para executar."
+            echo "Nenhum diretório tests encontrado. Continuando..."
           fi
 
       - name: Iniciar o scanner
-        shell: bash
+        working-directory: ./bot_gols
+        env:
+          PYTHONPATH: ./src
+          PYTHONUNBUFFERED: "1"
         run: |
-          set -e
-
           echo "Iniciando bot..."
-          echo "Script: $BOT_SCRIPT"
-
-          PYTHONPATH=src:. python "$BOT_SCRIPT"
+          echo "Script:"
+          find src -name "run_bot.py" -print
+          python src/scripts/run_bot.py
